@@ -291,20 +291,6 @@ class DownloadService : LifecycleService() {
             _downloadFlow.emit(item.id to DownloadStatus.Completed)
 
             if (item.type == FileType.VIDEO) {
-                // Merge audio FIRST — mergeAudioIntoVideo replaces the video file on disk.
-                // Thumbnail must be embedded AFTER the merge so it is not lost.
-                val audioItem = Database.downloadDao()
-                    .getDownloadById(item.videoId)
-                    ?.downloadItems
-                    ?.firstOrNull { it.type == FileType.AUDIO }
-                if (audioItem != null && audioItem.path.exists() &&
-                    audioItem.path.fileSize() > 0
-                ) {
-                    mergeAudioIntoVideo(item, audioItem)
-                }
-
-                // Embed thumbnail AFTER the merge (or immediately if no audio was selected),
-                // so it is always written into the final file that remains on disk.
                 val download = Database.downloadDao().getDownloadById(item.videoId)
                 val thumbPath = download?.download?.thumbnailPath
                 if (thumbPath != null) {
@@ -313,6 +299,17 @@ class DownloadService : LifecycleService() {
                     } catch (e: Exception) {
                         Log.e(TAG(), "Failed to embed thumbnail for ${item.videoId}: ${e.message}")
                     }
+                }
+
+                // Try to mux separately-downloaded audio into the video file
+                val audioItem = Database.downloadDao()
+                    .getDownloadById(item.videoId)
+                    ?.downloadItems
+                    ?.firstOrNull { it.type == FileType.AUDIO }
+                if (audioItem != null && audioItem.path.exists() &&
+                    audioItem.path.fileSize() > 0
+                ) {
+                    mergeAudioIntoVideo(item, audioItem)
                 }
             }
         } else {
