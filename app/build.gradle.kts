@@ -106,13 +106,10 @@ android {
     }
 
     dependenciesInfo {
-        // Disables dependency metadata when building APKs.
         includeInApk = false
-        // Disables dependency metadata when building Android App Bundles.
         includeInBundle = false
     }
 
-    // language preference for Android 13 and above
     androidResources {
         generateLocaleConfig = true
     }
@@ -163,7 +160,6 @@ dependencies {
     /* NewPipe Extractor */
     implementation(libs.newpipeextractor)
 
-
     /* Coil */
     coreLibraryDesugaring(libs.desugaring)
     implementation(libs.coil)
@@ -179,6 +175,9 @@ dependencies {
 
     /* AndroidX Paging */
     implementation(libs.androidx.paging)
+
+    /* MP4Parser - Thumbnail embedding */
+    implementation("org.mp4parser:isoparser:1.9.41")
 
     /* Testing */
     testImplementation(libs.junit)
