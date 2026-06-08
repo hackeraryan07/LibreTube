@@ -83,6 +83,11 @@ import kotlin.io.path.deleteIfExists
 import kotlin.io.path.div
 import kotlin.io.path.fileSize
 import kotlin.math.min
+import android.media.MediaExtractor
+import android.media.MediaFormat
+import android.media.MediaMuxer
+import kotlin.io.path.deleteIfExists
+import kotlin.io.path.exists
 
 /**
  * Download service with custom implementation of downloading using [HttpURLConnection].
@@ -294,6 +299,17 @@ class DownloadService : LifecycleService() {
                     } catch (e: Exception) {
                         Log.e(TAG(), "Failed to embed thumbnail for ${item.videoId}: ${e.message}")
                     }
+                }
+
+                // Try to mux separately-downloaded audio into the video file
+                val audioItem = Database.downloadDao()
+                    .getDownloadById(item.videoId)
+                    ?.downloadItems
+                    ?.firstOrNull { it.type == FileType.AUDIO }
+                if (audioItem != null && audioItem.path.exists() &&
+                    audioItem.path.fileSize() > 0
+                ) {
+                    mergeAudioIntoVideo(item, audioItem)
                 }
             }
         } else {
@@ -703,6 +719,129 @@ class DownloadService : LifecycleService() {
         fun getService(): DownloadService = this@DownloadService
     }
 
+
+    /**
+     * Mux the separately downloaded audio track into the video file using Android's
+     * [MediaMuxer] / [MediaExtractor] APIs.  After a successful merge the standalone
+     * audio file is deleted.  A notification is shown while the operation is running.
+     */
+    private suspend fun mergeAudioIntoVideo(videoItem: DownloadItem, audioItem: DownloadItem) {
+        val mergeNotifId = videoItem.getNotificationId() + MERGE_NOTIF_OFFSET
+
+        // Show "Merging audio & video…" notification
+        val mergeNotifBuilder = Builder(this, DOWNLOAD_CHANNEL_NAME)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(getString(R.string.merging_audio_video))
+            .setContentText(videoItem.fileName)
+            .setProgress(0, 0, true)
+            .setOngoing(true)
+            .setGroup(DOWNLOAD_NOTIFICATION_GROUP)
+        notificationManager.notify(mergeNotifId, mergeNotifBuilder.build())
+
+        withContext(Dispatchers.IO) {
+            val videoFile = videoItem.path.toFile()
+            val audioFile = audioItem.path.toFile()
+            val outputFile = java.io.File(
+                videoFile.parent,
+                videoFile.nameWithoutExtension + "_merged." + videoFile.extension
+            )
+
+            try {
+                val muxer = MediaMuxer(
+                    outputFile.absolutePath,
+                    MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4
+                )
+
+                // Add video track
+                val videoExtractor = MediaExtractor()
+                videoExtractor.setDataSource(videoFile.absolutePath)
+                val videoTrackIndex = (0 until videoExtractor.trackCount).firstOrNull { i ->
+                    videoExtractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)
+                        ?.startsWith("video/") == true
+                }
+                if (videoTrackIndex == null) {
+                    muxer.release()
+                    videoExtractor.release()
+                    Log.e(TAG(), "No video track found in ${videoFile.name}")
+                    return@withContext
+                }
+                videoExtractor.selectTrack(videoTrackIndex)
+                val videoFormat = videoExtractor.getTrackFormat(videoTrackIndex)
+                val muxVideoTrack = muxer.addTrack(videoFormat)
+
+                // Add audio track
+                val audioExtractor = MediaExtractor()
+                audioExtractor.setDataSource(audioFile.absolutePath)
+                val audioTrackIndex = (0 until audioExtractor.trackCount).firstOrNull { i ->
+                    audioExtractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME)
+                        ?.startsWith("audio/") == true
+                }
+                if (audioTrackIndex == null) {
+                    muxer.release()
+                    videoExtractor.release()
+                    audioExtractor.release()
+                    Log.e(TAG(), "No audio track found in ${audioFile.name}")
+                    return@withContext
+                }
+                audioExtractor.selectTrack(audioTrackIndex)
+                val audioFormat = audioExtractor.getTrackFormat(audioTrackIndex)
+                val muxAudioTrack = muxer.addTrack(audioFormat)
+
+                muxer.start()
+
+                val bufSize = 1024 * 1024
+                val buf = java.nio.ByteBuffer.allocate(bufSize)
+                val bufInfo = android.media.MediaCodec.BufferInfo()
+
+                // Write video samples
+                videoExtractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                while (true) {
+                    bufInfo.offset = 0
+                    bufInfo.size = videoExtractor.readSampleData(buf, 0)
+                    if (bufInfo.size < 0) break
+                    bufInfo.presentationTimeUs = videoExtractor.sampleTime
+                    bufInfo.flags = videoExtractor.sampleFlags
+                    muxer.writeSampleData(muxVideoTrack, buf, bufInfo)
+                    videoExtractor.advance()
+                }
+
+                // Write audio samples
+                audioExtractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                while (true) {
+                    bufInfo.offset = 0
+                    bufInfo.size = audioExtractor.readSampleData(buf, 0)
+                    if (bufInfo.size < 0) break
+                    bufInfo.presentationTimeUs = audioExtractor.sampleTime
+                    bufInfo.flags = audioExtractor.sampleFlags
+                    muxer.writeSampleData(muxAudioTrack, buf, bufInfo)
+                    audioExtractor.advance()
+                }
+
+                muxer.stop()
+                muxer.release()
+                videoExtractor.release()
+                audioExtractor.release()
+
+                // Replace video file with merged output
+                videoFile.delete()
+                outputFile.renameTo(videoFile)
+
+                // Delete standalone audio file
+                audioItem.path.deleteIfExists()
+                Database.downloadDao().deleteDownloadItemById(audioItem.id)
+
+                Log.i(TAG(), "Audio merged successfully into ${videoFile.name}")
+            } catch (e: Exception) {
+                outputFile.delete()
+                Log.e(TAG(), "Failed to merge audio into video: ${e.message}")
+                Log.e(TAG(), e.stackTraceToString())
+            }
+        }
+
+        // Dismiss the merging notification
+        notificationManager.cancel(mergeNotifId)
+    }
+
     companion object {
         private const val DOWNLOAD_NOTIFICATION_GROUP = "download_notification_group"
         const val ACTION_SERVICE_STARTED =
@@ -714,6 +853,7 @@ class DownloadService : LifecycleService() {
         // to the amount of requests that's being made
         private const val BYTES_PER_REQUEST_MIN = 500_000L
         private const val BYTES_PER_REQUEST_MAX = 3_000_000L
+        private const val MERGE_NOTIF_OFFSET = 10_000
 
         var IS_DOWNLOAD_RUNNING = false
     }
