@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: Build and upload APK
+    name: Build, sign and upload APK
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -26,9 +26,36 @@ jobs:
       - name: Build APK
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: Upload APK as artifact
+      - name: Generate debug keystore for signing
+        run: |
+          keytool -genkey -v \
+            -keystore debug-signing.jks \
+            -alias libretube \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass android \
+            -keypass android \
+            -dname "CN=LibreTube,O=LibreTube,C=US"
+
+      - name: Sign APK with debug keystore
+        run: |
+          BUILD_TOOLS=$(ls $ANDROID_HOME/build-tools/ | sort -V | tail -1)
+          UNSIGNED_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
+          echo "Signing: $UNSIGNED_APK with build-tools $BUILD_TOOLS"
+          $ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner sign \
+            --ks debug-signing.jks \
+            --ks-key-alias libretube \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out app-release-signed.apk \
+            "$UNSIGNED_APK"
+          echo "Verifying signature..."
+          $ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner verify --verbose app-release-signed.apk
+
+      - name: Upload signed APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-unsigned
-          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          name: app-release-signed
+          path: app-release-signed.apk
           retention-days: 7
