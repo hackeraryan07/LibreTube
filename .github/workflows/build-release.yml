@@ -1,35 +1,34 @@
 name: Build and release app
 
-  on:
-    workflow_dispatch:
-    push:
-      tags:
-        - 'v*.*'
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*'
 
-  jobs:
-    build:
-      name: Build and upload APK
-      runs-on: ubuntu-latest
-      permissions:
-        contents: write
+jobs:
+  build:
+    name: Build and upload APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
-      steps:
-        - uses: actions/checkout@v4
+    steps:
+      - uses: actions/checkout@v4
 
-        - name: Set up JDK
-          uses: actions/setup-java@v5
-          with:
-            distribution: "zulu"
-            java-version: "17"
-            cache: "gradle"
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: "zulu"
+          java-version: "17"
+          cache: "gradle"
 
-        - name: Build APK
-          run: ./gradlew assembleRelease --no-daemon
+      - name: Build APK
+        run: ./gradlew assembleRelease --no-daemon
 
-        - name: Upload APK as artifact
-          uses: actions/upload-artifact@v4
-          with:
-            name: app-release-unsigned
-            path: app/build/outputs/apk/release/app-release-unsigned.apk
-            retention-days: 7
-  
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-unsigned
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 7
