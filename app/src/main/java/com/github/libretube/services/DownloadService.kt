@@ -46,6 +46,7 @@ import com.github.libretube.helpers.ImageHelper
 import com.github.libretube.helpers.NetworkHelper
 import com.github.libretube.helpers.PlayerHelper
 import com.github.libretube.helpers.ProxyHelper
+import com.github.libretube.helpers.ThumbnailEmbedder
 import com.github.libretube.obj.DownloadStatus
 import com.github.libretube.parcelable.DownloadData
 import com.github.libretube.receivers.NotificationReceiver
@@ -283,6 +284,18 @@ class DownloadService : LifecycleService() {
         val completed = totalRead >= item.downloadSize
         if (completed) {
             _downloadFlow.emit(item.id to DownloadStatus.Completed)
+
+            if (item.type == FileType.VIDEO) {
+                val download = Database.downloadDao().getDownloadById(item.videoId)
+                val thumbPath = download?.download?.thumbnailPath
+                if (thumbPath != null) {
+                    try {
+                        ThumbnailEmbedder.embedThumbnail(item.path, thumbPath)
+                    } catch (e: Exception) {
+                        Log.e(TAG(), "Failed to embed thumbnail for ${item.videoId}: ${e.message}")
+                    }
+                }
+            }
         } else {
             _downloadFlow.emit(item.id to DownloadStatus.Paused)
         }
