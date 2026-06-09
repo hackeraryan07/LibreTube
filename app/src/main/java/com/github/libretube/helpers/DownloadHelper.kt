@@ -2,6 +2,9 @@ package com.github.libretube.helpers
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Environment
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.os.bundleOf
@@ -42,12 +45,25 @@ object DownloadHelper {
     private const val VIDEO_MIMETYPE = "video/*"
 
     fun getDownloadDir(context: Context, path: String): Path {
-        val storageDir =
-            try {
-                context.getExternalFilesDir(null)!!
-            } catch (e: Exception) {
-                context.filesDir
+        val storageDir = try {
+            // On Android 10+ (Q), apps can write to public directories without any permission.
+            // On Android 9 and below we need WRITE_EXTERNAL_STORAGE; fall back to app-private
+            // storage if that permission has not been granted yet.
+            val canWritePublic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                ) == PackageManager.PERMISSION_GRANTED
+
+            if (canWritePublic) {
+                // Saves to /sdcard/LibreTube/ — visible in Files app, not deleted on uninstall
+                Environment.getExternalStoragePublicDirectory("LibreTube")
+            } else {
+                context.getExternalFilesDir(null) ?: context.filesDir
             }
+        } catch (e: Exception) {
+            context.getExternalFilesDir(null) ?: context.filesDir
+        }
         return (storageDir.toPath() / path).createDirectories()
     }
 
