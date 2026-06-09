@@ -308,11 +308,7 @@ class DownloadService : LifecycleService() {
                 val download = Database.downloadDao().getDownloadById(item.videoId)
                 val thumbPath = download?.download?.thumbnailPath
                 if (thumbPath != null) {
-                    try {
-                        ThumbnailEmbedder.embedThumbnail(item.path, thumbPath)
-                    } catch (e: Exception) {
-                        Log.e(TAG(), "Failed to embed thumbnail for ${item.videoId}: ${e.message}")
-                    }
+                    embedThumbnailWithNotification(item, thumbPath)
                 }
             }
         } else {
@@ -845,6 +841,54 @@ class DownloadService : LifecycleService() {
         notificationManager.cancel(mergeNotifId)
     }
 
+    /**
+     * Embeds the thumbnail into the video file, showing an in-progress notification while the
+     * operation runs and a completion notification when it finishes (or an error notification if
+     * it fails).
+     */
+    private suspend fun embedThumbnailWithNotification(videoItem: DownloadItem, thumbPath: Path) {
+        val embedNotifId = videoItem.getNotificationId() + EMBED_NOTIF_OFFSET
+
+        // Show "Embedding thumbnail…" notification
+        val embedNotifBuilder = Builder(this, DOWNLOAD_CHANNEL_NAME)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(getString(R.string.embedding_thumbnail))
+            .setContentText(videoItem.fileName)
+            .setProgress(0, 0, true)
+            .setOngoing(true)
+            .setGroup(DOWNLOAD_NOTIFICATION_GROUP)
+        notificationManager.notify(embedNotifId, embedNotifBuilder.build())
+
+        var success = false
+        withContext(Dispatchers.IO) {
+            try {
+                ThumbnailEmbedder.embedThumbnail(videoItem.path, thumbPath)
+                success = true
+            } catch (e: Exception) {
+                Log.e(TAG(), "Failed to embed thumbnail for ${videoItem.videoId}: ${e.message}")
+            }
+        }
+
+        // Update notification to show result
+        val resultNotif = Builder(this, DOWNLOAD_CHANNEL_NAME)
+            .setGroup(DOWNLOAD_NOTIFICATION_GROUP)
+            .setOngoing(false)
+            .setProgress(0, 0, false)
+
+        if (success) {
+            resultNotif
+                .setSmallIcon(R.drawable.ic_done)
+                .setContentTitle(getString(R.string.thumbnail_embedded))
+                .setContentText(videoItem.fileName)
+        } else {
+            resultNotif
+                .setSmallIcon(R.drawable.ic_download)
+                .setContentTitle(getString(R.string.thumbnail_embed_failed))
+                .setContentText(videoItem.fileName)
+        }
+        notificationManager.notify(embedNotifId, resultNotif.build())
+    }
+
     companion object {
         private const val DOWNLOAD_NOTIFICATION_GROUP = "download_notification_group"
         const val ACTION_SERVICE_STARTED =
@@ -857,6 +901,7 @@ class DownloadService : LifecycleService() {
         private const val BYTES_PER_REQUEST_MIN = 500_000L
         private const val BYTES_PER_REQUEST_MAX = 3_000_000L
         private const val MERGE_NOTIF_OFFSET = 10_000
+        private const val EMBED_NOTIF_OFFSET = 20_000
 
         var IS_DOWNLOAD_RUNNING = false
     }
